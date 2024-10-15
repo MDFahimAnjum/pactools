@@ -1,3 +1,14 @@
+A fork of pactools
+=================
+
+- This is a fork of the original pactools
+- Modified to validate the PAC methodology by replicating the results of Cora et al.
+
+Changes
+=======
+
+- Implimented eegfilt: the FIR bandpass filtering from EEGLab
+
 =============================
 Getting Started with pactools
 =============================
