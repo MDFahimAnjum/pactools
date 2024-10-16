@@ -110,11 +110,11 @@ def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
             
             # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
             filtwts = signal.firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
-            
-            for ii in range(n_epochs):
-                # Apply zero-phase filtering
-                low_sig = signal.filtfilt(filtwts, 1, sigs[ii, :])
-                #we use hilbert transformed data
-                filtered[jj, ii, :] = hilbert(low_sig)[:n_points]
+            # Apply zero-phase filtering
+            low_sig = signal.filtfilt(filtwts, 1, sigs, axis=1)
+            # Apply Hilbert transform along each row
+            analytic_sigs = hilbert(low_sig, axis=1)  # Apply Hilbert transform along rows
+            analytic_sigs =analytic_sigs[:,:n_points]
+            filtered[jj, :, :]=analytic_sigs            
 
     return filtered
