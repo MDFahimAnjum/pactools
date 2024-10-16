@@ -1073,19 +1073,35 @@ def _one_driven_modulation_index(fs, sigin, sigdriv, sigdriv_imag, model, mask,
     return spec_diff
 
 
-def _get_shifts(random_state, n_points, minimum_shift, fs, n_surrogates):
-    """Compute the shifts for the surrogate analysis"""
+def _get_shifts(random_state, n_points, minimum_shift, fs, n_surrogates,method=1):
+    """Compute the shifts for the surrogate analysis
+        There are two methods for shift calculation.
+        method:
+        0: original
+        1: this is according to Cora et al.
+    """
     n_iterations = max(1, 1 + n_surrogates)
 
     n_minimum_shift = max(1, int(fs * minimum_shift))
+    n_maximum_shift = n_points - n_minimum_shift
     # shift at least minimum_shift seconds, i.e. n_minimum_shift points
     if n_iterations > 1:
-        if n_points - n_minimum_shift < n_minimum_shift:
-            raise ValueError("The minimum shift is longer than half the "
-                             "visible data.")
+        if method==0:
+            if n_maximum_shift < n_minimum_shift:
+                raise ValueError("The minimum shift is longer than half the "
+                                "visible data.")
 
-        shifts = random_state.randint(
-            n_minimum_shift, n_points - n_minimum_shift, size=n_iterations)
+            shifts = random_state.randint(
+                n_minimum_shift, n_maximum_shift, size=n_iterations)
+        elif method==1:
+            # Generate a large number of random shifts (2 * num_surrogates)
+            potential_shifts = random_state.randint(1, n_points, size=2 * n_surrogates)
+            # Filter shifts to ensure they are between minimum and maximum shift limits
+            valid_shifts = potential_shifts[(potential_shifts >= n_minimum_shift) & (potential_shifts <= n_maximum_shift)]
+            # Select the first 'n_surrogates' valid shifts
+            if len(valid_shifts) < n_surrogates:
+                raise ValueError("Not enough valid shifts found. Adjust the minimum or maximum shift range.")
+            shifts = valid_shifts[:(n_surrogates+1)]
     else:
         shifts = np.array([0])
 
