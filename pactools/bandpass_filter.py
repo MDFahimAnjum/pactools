@@ -58,6 +58,10 @@ def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
     filtered = np.zeros((n_frequencies, n_epochs, n_points),
                         dtype=np.complex128)
 
+    # eegfilt parameters
+    minfac = 3  # example multiplier, same as in MATLAB
+    min_filtorder = 15  # minimum filter length
+
     for jj, frequency in enumerate(frequency_range):
 
         if frequency <= 0:
@@ -96,22 +100,18 @@ def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
         
         # --------- with eegfilt
         elif filter_method == 'eegfilt':
+            locutoff = frequency - bandwidth / 2.0  # low cutoff frequency (replace with actual value)
+            hicutoff = frequency + bandwidth / 2.0  # high cutoff frequency (replace with actual value)
+
+            # Calculate the filter order
+            filtorder = int(minfac * (fs // locutoff))  # Use integer division
+            if filtorder < min_filtorder:
+                filtorder = min_filtorder
+            
+            # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
+            filtwts = signal.firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
+            
             for ii in range(n_epochs):
-                # Given parameters
-                minfac = 3  # example multiplier, same as in MATLAB
-                min_filtorder = 15  # minimum filter length
-                srate =fs  # sample rate (replace with actual value)
-                locutoff = frequency - bandwidth / 2.0  # low cutoff frequency (replace with actual value)
-                hicutoff = frequency + bandwidth / 2.0  # high cutoff frequency (replace with actual value)
-
-                # Calculate the filter order
-                filtorder = int(minfac * (srate // locutoff))  # Use integer division
-                if filtorder < min_filtorder:
-                    filtorder = min_filtorder
-                
-                # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
-                filtwts = signal.firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=srate)
-
                 # Apply zero-phase filtering
                 low_sig = signal.filtfilt(filtwts, 1, sigs[ii, :])
                 #we use hilbert transformed data
