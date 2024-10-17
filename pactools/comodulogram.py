@@ -1073,7 +1073,7 @@ def _one_driven_modulation_index(fs, sigin, sigdriv, sigdriv_imag, model, mask,
     return spec_diff
 
 
-def _get_shifts(random_state, n_points, minimum_shift, fs, n_surrogates,method=1):
+def _get_shifts(random_state, n_points, minimum_shift, fs, n_surrogates,method=0):
     """Compute the shifts for the surrogate analysis
         There are two methods for shift calculation.
         method:
