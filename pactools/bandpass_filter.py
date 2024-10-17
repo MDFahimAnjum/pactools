@@ -1,10 +1,9 @@
 import numpy as np
-from scipy.signal import hilbert
+from scipy.signal import hilbert,firwin,filtfilt
 
 from .utils.maths import compute_n_fft
 from .utils.carrier import Carrier
 from .utils.fir import BandPassFilter
-import scipy.signal as signal
 
 def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
                        filter_method='eegfilt'):
@@ -109,9 +108,9 @@ def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
                 filtorder = min_filtorder
             
             # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
-            filtwts = signal.firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
+            filtwts = firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
             # Apply zero-phase filtering
-            low_sig = signal.filtfilt(filtwts, 1, sigs, axis=1)
+            low_sig = filtfilt(filtwts, 1, sigs, axis=1)
             # Apply Hilbert transform along each row
             analytic_sigs = hilbert(low_sig, axis=1)  # Apply Hilbert transform along rows
             analytic_sigs =analytic_sigs[:,:n_points]
