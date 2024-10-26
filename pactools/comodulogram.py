@@ -17,6 +17,8 @@ from .utils.validation import check_consistent_shape, check_is_fitted
 from .utils.viz import add_colorbar
 from .bandpass_filter import multiple_band_pass
 from .mne_api import MaskIterator, _check_mne
+import torch
+import gc
 
 N_BINS_TORT = 18
 
@@ -110,6 +112,12 @@ class Comodulogram(object):
     n_jobs : int
         Number of jobs to use in parallel computations.
         Recquires scikit-learn installed.
+    
+    vectorized_calculation : int
+        Select how to calculate MI values for tort method.
+        - 0 : original method (default; no vectorization or gpu usage)
+        - 1 : vectorized method using pytorch with gpu if available for each amplitude across all surrogates (less gpu memory)
+        - 2 : vectorized method using pytorch with gpu if available across all surrogates and amplitude (faster but needs more gpu memory)
 
     Examples
     --------
@@ -125,7 +133,7 @@ class Comodulogram(object):
                  high_fq_width='auto', method='tort', n_surrogates=0,
                  vmin=None, vmax=None, progress_bar=True, ax_special=None,
                  minimum_shift=1.0, random_state=None, coherence_params=dict(),
-                 extract_params=dict(), low_fq_width_2=4.0, n_jobs=1):
+                 extract_params=dict(), low_fq_width_2=4.0, n_jobs=1,vectorized_calculation=0):
         self.fs = fs
         self.low_fq_range = low_fq_range
         self.low_fq_width = low_fq_width
@@ -143,6 +151,7 @@ class Comodulogram(object):
         self.extract_params = extract_params
         self.low_fq_width_2 = low_fq_width_2
         self.n_jobs = n_jobs
+        self.vectorized_calculation=vectorized_calculation
 
     def _check_params(self):
         high_fq_range = self.high_fq_range
@@ -657,18 +666,31 @@ def _comodulogram(estimator, filtered_low, filtered_high, mask,
         else:
             raise ValueError('Unknown method %s.' % estimator.method)
 
-        delayed_func = delayed(_loop_over_shifts)
-        mi_list = Parallel(n_jobs=estimator.n_jobs)(delayed_func(
-            _one_modulation_index, estimator.shifts_,
-            amplitude=filtered_high[j], phase_preprocessed=phase_preprocessed,
-            norm_a=norm_a[j], method=estimator.method,
-            ax_special=estimator.ax_special) for j in range(n_high))
-
-        mi_list = np.array(mi_list).reshape(n_high, n_shifts).T
+        if estimator.vectorized_calculation == 1 and estimator.method == 'tort':
+            mi_list=[_modulation_index_vectorized_v1_gpu(amplitude=filtered_high[j], phase_preprocessed=phase_preprocessed, 
+                method=estimator.method, shifts=estimator.shifts_) for j in range(n_high)]
+            mi_list = np.array(mi_list).reshape(n_high, n_shifts).T
+        elif estimator.vectorized_calculation == 2 and estimator.method == 'tort':
+            mi_list=_modulation_index_vectorized_v2_gpu(amplitudes=filtered_high, phase_preprocessed=phase_preprocessed, 
+                method=estimator.method, shifts=estimator.shifts_)
+            mi_list = mi_list.T
+        else:
+            delayed_func = delayed(_loop_over_shifts)
+            mi_list = Parallel(n_jobs=estimator.n_jobs)(delayed_func(
+                _one_modulation_index, estimator.shifts_,
+                amplitude=filtered_high[j], phase_preprocessed=phase_preprocessed,
+                norm_a=norm_a[j], method=estimator.method,
+                ax_special=estimator.ax_special) for j in range(n_high))
+            
+            mi_list = np.array(mi_list).reshape(n_high, n_shifts).T
         comod_list[:, i, :] = mi_list
 
         if estimator.progress_bar:
             estimator.progress_bar.update_with_increment_value(1)
+
+    # clear memory
+    if estimator.vectorized_calculation > 0:
+        clear_all_gpu_variables()
 
     return comod_list
 
@@ -749,6 +771,95 @@ def _one_modulation_index(amplitude, phase_preprocessed, norm_a, method, shift,
 
     return MI
 
+
+def _modulation_index_vectorized_v1_gpu(amplitude, phase_preprocessed, method='tort', shifts=None):
+    """
+    Compute modulation indices for multiple shift values in a vectorized manner using GPU.
+    Used by PAC method in STANDARD_PAC_METRICS.
+    """
+    if method != 'tort':
+        raise ValueError("Incompatible method for vectorized calculation: %s" % method)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Move inputs to GPU
+    amplitude = torch.tensor(amplitude, dtype=torch.float64, device=device)
+    phase_preprocessed = torch.tensor(phase_preprocessed, dtype=torch.int32, device=device)
+    
+    # Prepare phase-shifted versions of phase_preprocessed
+    shifted_phases = torch.stack([torch.roll(phase_preprocessed, shift) for shift in shifts], dim=0)
+
+    # Broadcast amplitude to match the shape of shifted_phases
+    amplitude_expanded = amplitude.unsqueeze(1).repeat(1, len(shifts))  # Shape: (len(phase_preprocessed), len(shifts))
+
+    # Vectorized computation of the mean amplitude distribution along phase bins
+    n_bins = N_BINS_TORT
+    amplitude_dist = torch.ones((len(shifts), n_bins), dtype=torch.float64, device=device)  # Initialize with ones
+
+    unique_bins = torch.unique(phase_preprocessed)
+
+    for b in unique_bins:
+        # Mask for selecting amplitude values corresponding to each bin in each shift
+        mask = (shifted_phases == b).transpose(0, 1)  # Shape: (len(phase_preprocessed), len(shifts))
+        selected_amplitudes = torch.where(mask, amplitude_expanded, torch.tensor(0.0, device=device))
+        amplitude_dist[:, b] = selected_amplitudes.sum(dim=0) / torch.maximum(mask.sum(dim=0), torch.tensor(1.0, device=device))
+
+    # Calculate the KL divergence for each shift value
+    amplitude_dist /= amplitude_dist.sum(dim=1, keepdims=True)
+    divergence_kl = torch.sum(amplitude_dist * torch.log(amplitude_dist * n_bins), dim=1)
+    
+    # Compute Modulation Index for each shift
+    MI = divergence_kl / torch.log(torch.tensor(n_bins, dtype=torch.float64, device=device))
+
+    return MI.cpu().numpy()  # Return to CPU if further processing on CPU is needed
+
+def _modulation_index_vectorized_v2_gpu(amplitudes, phase_preprocessed, method='tort', shifts=None):
+    """
+    Compute modulation indices for multiple shift values in a vectorized manner using GPU.
+    Used by PAC method in STANDARD_PAC_METRICS.
+    """
+    if method != 'tort':
+        raise ValueError("Incompatible method for vectorized calculation: %s" % method)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Move to GPU
+    amplitudes = torch.tensor(amplitudes, dtype=torch.float64, device=device)
+    phase_preprocessed = torch.tensor(phase_preprocessed, dtype=torch.int32, device=device)
+    
+    # Prepare phase-shifted versions of phase_preprocessed
+    shifted_phases = torch.stack([torch.roll(phase_preprocessed, shift) for shift in shifts], dim=0)
+
+    # Broadcast amplitudes to match the shape of shifted_phases
+    amplitudes_expanded = amplitudes.unsqueeze(-1).repeat(1, 1, len(shifts))  # Shape: (n_amplitudes, len(phase_preprocessed), len(shifts))
+
+    # Vectorized computation of the mean amplitude distribution along phase bins
+    n_bins = N_BINS_TORT
+    
+    # Initialize amplitude distributions for each shift and each amplitude series
+    amplitude_dist = torch.ones((amplitudes.shape[0], len(shifts), n_bins), dtype=torch.float64, device=device)
+    
+    unique_bins = torch.unique(phase_preprocessed)
+    
+    for b in unique_bins:
+        # Mask for selecting amplitude values corresponding to each bin in each shift
+        mask = (shifted_phases == b).transpose(0, 1)  # Shape: (len(phase_preprocessed), len(shifts))
+        selected_amplitudes = torch.where(mask.unsqueeze(0), amplitudes_expanded, torch.tensor(0.0, device=device))
+        amplitude_dist[:, :, b] = selected_amplitudes.sum(dim=1) / torch.maximum(mask.sum(dim=0).unsqueeze(0), torch.tensor(1.0, device=device))
+    
+    # Calculate the KL divergence for each shift value
+    amplitude_dist /= amplitude_dist.sum(dim=2, keepdims=True)
+    divergence_kl = (amplitude_dist * torch.log(amplitude_dist * n_bins)).sum(dim=2)
+    
+    # Compute Modulation Index for each shift
+    MI = divergence_kl / torch.log(torch.tensor(n_bins, dtype=torch.float64, device=device))
+    
+    return  MI.cpu().numpy()  # Move back to CPU if needed for further processing
+
+def clear_all_gpu_variables():
+    # Clear PyTorch cache and garbage collect
+    torch.cuda.empty_cache()
+    gc.collect()
 
 def _same_mask_on_all_epochs(sig, mask, method):
     """
