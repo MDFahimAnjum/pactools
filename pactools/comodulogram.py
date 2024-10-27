@@ -620,11 +620,11 @@ def _comodulogram(estimator, filtered_low, filtered_high, mask,
         if estimator.method == 'vanwijk':
             filtered_low_2 = filtered_low_2[:, ~mask]
     else:
+        # 3D array (n_freq, n_epoch, n_point) to 2D array (n_freq, n_epoch * n_point)
         filtered_low = filtered_low.reshape(filtered_low.shape[0], -1)
         filtered_high = filtered_high.reshape(filtered_high.shape[0], -1)
         if estimator.method == 'vanwijk':
-            filtered_low_2 = filtered_low_2.reshape(filtered_low_2.shape[0],
-                                                    -1)
+            filtered_low_2 = filtered_low_2.reshape(filtered_low_2.shape[0], -1)
 
     n_low, _ = filtered_low.shape
     n_high, _ = filtered_high.shape
