@@ -5,12 +5,14 @@ A fork of pactools
 - Modified to validate the PAC methodology by replicating the results of Cora et al.
 - Added GPU-based PAC calculation method that is 10x times faster than the original codebase
 - Added additional random surrogate generation method
+- Added parallel bandpass filtering using joblib's multi-threading functionality
 
 Changes
 =======
 
 - Implimented eegfilt: the FIR bandpass filtering from EEGLab
 - Implimented GPU-based (PyTorch) PAC calculation methods. This is optional and there are 2 variations for low-end and high-end GPUs respectively.
+- Implimented parallel bandpass filtering of data using joblib's multi-threading functionality
 
 Installation
 ============

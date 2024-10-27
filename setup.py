@@ -26,6 +26,7 @@ setup(
         "scikit-learn",
         "mne",
         "h5py",
-        "torch"
+        "torch",
+        "joblib"
     ],
 )
