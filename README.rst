@@ -3,11 +3,34 @@ A fork of pactools
 
 - This is a fork of the original pactools
 - Modified to validate the PAC methodology by replicating the results of Cora et al.
+- Added GPU-based PAC calculation method that is 10x times faster than the original codebase
+- Added additional random surrogate generation method
 
 Changes
 =======
 
 - Implimented eegfilt: the FIR bandpass filtering from EEGLab
+- Implimented GPU-based (PyTorch) PAC calculation methods. This is optional and there are 2 variations for low-end and high-end GPUs respectively.
+
+Installation
+============
+
+To install this version of ``pactools``, use the following command:
+
+- Latest stable version::
+
+    pip install git+https://github.com/MDFahimAnjum/pactools
+
+- Development version::
+
+    pip install git+https://github.com/MDFahimAnjum/pactools
+
+
+To check if everything worked fine, you can do::
+
+	python -c 'import pactools'
+
+and it should not give any error messages.
 
 =============================
 Getting Started with pactools
@@ -36,27 +59,6 @@ In particular, it implements the **driven auto-regressive (DAR)**
 models presented in the reference below [`Dupre la Tour et al. 2017`_].
 
 Read more in the `documentation <https://pactools.github.io>`_.
-
-Installation
-============
-
-To install ``pactools``, use one of the following two commands:
-
-- Latest stable version::
-
-    pip install pactools
-
-- Development version::
-
-    pip install git+https://github.com/pactools/pactools.git#egg=pactools
-
-To upgrade, use the ``--upgrade`` flag provided by ``pip``.
-
-To check if everything worked fine, you can do::
-
-	python -c 'import pactools'
-
-and it should not give any error messages.
 
 Phase-amplitude coupling (PAC)
 ==============================
