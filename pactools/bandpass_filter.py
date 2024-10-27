@@ -4,8 +4,9 @@ from scipy.signal import hilbert,firwin,filtfilt
 from .utils.maths import compute_n_fft
 from .utils.carrier import Carrier
 from .utils.fir import BandPassFilter
+from joblib import Parallel, delayed
 
-def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
+def multiple_band_pass(sigs, fs, frequency_range, bandwidth, parallel_filter=False, n_cycles=None,
                        filter_method='eegfilt'):
     """
     Band-pass filter the signal at multiple frequencies
@@ -37,6 +38,12 @@ def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
         - 'mne' uses mne.filter.band_pass_filter in MNE-python package
         - 'eegfilt' uses implimentation of FIR filter of eegfilt.m script from EEGLab. (default)
 
+    parallel_filter : bool
+        Whether to conduct bandpass filterings in parallel (using joblib's multi-threading).
+        Only works for 'eegfilt' method.
+        - False : Parallel filtering disabled (default)
+        - True : Use Parallel filtering
+
     Returns
     -------
     filtered : array, shape (n_frequencies, n_epochs, n_points)
@@ -61,59 +68,96 @@ def multiple_band_pass(sigs, fs, frequency_range, bandwidth, n_cycles=None,
     minfac = 3  # example multiplier, same as in MATLAB
     min_filtorder = 15  # minimum filter length
 
-    for jj, frequency in enumerate(frequency_range):
+    if parallel_filter:
+        # Parallel filtering
+        if filter_method != 'eegfilt':
+            raise ValueError("Incompatible method for parallel filtering: %s" % filter_method)
+    
+        filtered = Parallel(n_jobs = -1 , prefer="threads")(
+            delayed(eegfilt_single)(sigs, fs, frequency, bandwidth, n_points, minfac=minfac, min_filtorder=min_filtorder)
+            for frequency in frequency_range
+        )
 
-        if frequency <= 0:
-            raise ValueError("Center frequency for bandpass filter should"
-                             "be non-negative. Got %s." % (frequency, ))
-        # evaluate the number of cycle for this bandwidth and frequency
-        if fixed_n_cycles is None:
-            n_cycles = 1.65 * frequency / bandwidth
+        # Convert list of arrays to 3D array with shape (n_frequencies, n_epochs, n_points)
+        filtered = np.array(filtered)
+    else:
+        for jj, frequency in enumerate(frequency_range):
 
-        # --------- with mne.filter.band_pass_filter
-        if filter_method == 'mne':
-            from mne.filter import band_pass_filter
-            for ii in range(n_epochs):
-                low_sig = band_pass_filter(
-                    sigs[ii, :], Fs=fs, Fp1=frequency - bandwidth / 2.0,
-                    Fp2=frequency + bandwidth / 2.0,
-                    l_trans_bandwidth=bandwidth / 4.0,
-                    h_trans_bandwidth=bandwidth / 4.0, n_jobs=1, method='iir')
+            if frequency <= 0:
+                raise ValueError("Center frequency for bandpass filter should"
+                                "be non-negative. Got %s." % (frequency, ))
+            # evaluate the number of cycle for this bandwidth and frequency
+            if fixed_n_cycles is None:
+                n_cycles = 1.65 * frequency / bandwidth
 
-                filtered[jj, ii, :] = hilbert(low_sig, n_fft)[:n_points]
+            # --------- with mne.filter.band_pass_filter
+            if filter_method == 'mne':
+                from mne.filter import band_pass_filter
+                for ii in range(n_epochs):
+                    low_sig = band_pass_filter(
+                        sigs[ii, :], Fs=fs, Fp1=frequency - bandwidth / 2.0,
+                        Fp2=frequency + bandwidth / 2.0,
+                        l_trans_bandwidth=bandwidth / 4.0,
+                        h_trans_bandwidth=bandwidth / 4.0, n_jobs=1, method='iir')
 
-        # --------- with pactools.utils.Carrier (deprecated)
-        elif filter_method == 'carrier':
-            for ii in range(n_epochs):
-                fir.design(fs, frequency, n_cycles, None, zero_mean=True)
-                low_sig = fir.direct(sigs[ii, :])
-                filtered[jj, ii, :] = hilbert(low_sig, n_fft)[:n_points]
+                    filtered[jj, ii, :] = hilbert(low_sig, n_fft)[:n_points]
 
-        # --------- with pactools.utils.BandPassFilter
-        elif filter_method == 'pactools':
-            fir = BandPassFilter(fs, fc=frequency, n_cycles=n_cycles,
-                                 bandwidth=None, zero_mean=True,
-                                 extract_complex=True)
-            low_sig, low_sig_imag = fir.transform(sigs)
-            filtered[jj, :, :] = low_sig + 1j * low_sig_imag
-        
-        # --------- with eegfilt
-        elif filter_method == 'eegfilt':
-            locutoff = frequency - bandwidth / 2.0  # low cutoff frequency (replace with actual value)
-            hicutoff = frequency + bandwidth / 2.0  # high cutoff frequency (replace with actual value)
+            # --------- with pactools.utils.Carrier (deprecated)
+            elif filter_method == 'carrier':
+                for ii in range(n_epochs):
+                    fir.design(fs, frequency, n_cycles, None, zero_mean=True)
+                    low_sig = fir.direct(sigs[ii, :])
+                    filtered[jj, ii, :] = hilbert(low_sig, n_fft)[:n_points]
 
-            # Calculate the filter order
-            filtorder = int(minfac * (fs // locutoff))  # Use integer division
-            if filtorder < min_filtorder:
-                filtorder = min_filtorder
+            # --------- with pactools.utils.BandPassFilter
+            elif filter_method == 'pactools':
+                fir = BandPassFilter(fs, fc=frequency, n_cycles=n_cycles,
+                                    bandwidth=None, zero_mean=True,
+                                    extract_complex=True)
+                low_sig, low_sig_imag = fir.transform(sigs)
+                filtered[jj, :, :] = low_sig + 1j * low_sig_imag
             
-            # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
-            filtwts = firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
-            # Apply zero-phase filtering
-            low_sig = filtfilt(filtwts, 1, sigs, axis=1)
-            # Apply Hilbert transform along each row
-            analytic_sigs = hilbert(low_sig, axis=1)  # Apply Hilbert transform along rows
-            analytic_sigs =analytic_sigs[:,:n_points]
-            filtered[jj, :, :]=analytic_sigs            
+            # --------- with eegfilt
+            elif filter_method == 'eegfilt':
+                locutoff = frequency - bandwidth / 2.0  # low cutoff frequency
+                hicutoff = frequency + bandwidth / 2.0  # high cutoff frequency
+                # Calculate the filter order
+                filtorder = int(minfac * (fs // locutoff))  # Use integer division
+                if filtorder < min_filtorder:
+                    filtorder = min_filtorder
+                
+                # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
+                filtwts = firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
+                # Apply zero-phase filtering
+                low_sig = filtfilt(filtwts, 1, sigs, axis=1)
+                # Apply Hilbert transform along each row
+                analytic_sigs = hilbert(low_sig, axis=1)  # Apply Hilbert transform along rows
+                analytic_sigs =analytic_sigs[:,:n_points]
+                filtered[jj, :, :]=analytic_sigs            
 
     return filtered
+
+def eegfilt_single(sigs, fs, frequency, bandwidth, n_points, minfac=3, min_filtorder=15):
+    """
+    Helper function to apply a bandpass filter to the signals for a single frequency.
+    """
+    if frequency <= 0:
+        raise ValueError(f"Center frequency for bandpass filter should be non-negative. Got {frequency}.")
+
+    locutoff = frequency - bandwidth / 2.0  # Low cutoff frequency
+    hicutoff = frequency + bandwidth / 2.0  # High cutoff frequency
+
+    # Calculate the filter order
+    filtorder = int(minfac * (fs // locutoff))
+    if filtorder < min_filtorder:
+        filtorder = min_filtorder
+    
+    # Design the FIR filter (using the window method, similar to fir1 in MATLAB)
+    filtwts = firwin(filtorder + 1, [locutoff, hicutoff], pass_zero=False, fs=fs)
+    # Apply zero-phase filtering
+    low_sig = filtfilt(filtwts, 1, sigs, axis=1)
+    # Apply Hilbert transform along each row
+    analytic_sigs = hilbert(low_sig, axis=1)  # Apply Hilbert transform along rows
+    analytic_sigs =analytic_sigs[:,:n_points]
+    
+    return analytic_sigs

@@ -119,6 +119,12 @@ class Comodulogram(object):
         - 1 : vectorized method using pytorch with gpu if available for each amplitude across all surrogates (less gpu memory)
         - 2 : vectorized method using pytorch with gpu if available across all surrogates and amplitude (faster but needs more gpu memory)
 
+    parallel_filter : bool
+        Whether to conduct bandpass filterings in parallel (using joblib's multi-threading).
+        Only works for 'eegfilt' method.
+        - False : Parallel filtering disabled (default)
+        - True : Use Parallel filtering
+        
     Examples
     --------
     >>> from pactools.comodulogram import Comodulogram
@@ -133,7 +139,7 @@ class Comodulogram(object):
                  high_fq_width='auto', method='tort', n_surrogates=0,
                  vmin=None, vmax=None, progress_bar=True, ax_special=None,
                  minimum_shift=1.0, random_state=None, coherence_params=dict(),
-                 extract_params=dict(), low_fq_width_2=4.0, n_jobs=1,vectorized_calculation=0):
+                 extract_params=dict(), low_fq_width_2=4.0, n_jobs=1,vectorized_calculation=0,parallel_filter=False):
         self.fs = fs
         self.low_fq_range = low_fq_range
         self.low_fq_width = low_fq_width
@@ -152,6 +158,7 @@ class Comodulogram(object):
         self.low_fq_width_2 = low_fq_width_2
         self.n_jobs = n_jobs
         self.vectorized_calculation=vectorized_calculation
+        self.parallel_filter=parallel_filter
 
     def _check_params(self):
         high_fq_range = self.high_fq_range
@@ -246,12 +253,12 @@ class Comodulogram(object):
 
             # compute a number of band-pass filtered signals
             filtered_high = multiple_band_pass(
-                high_sig, self.fs, self.high_fq_range, self.high_fq_width)
+                high_sig, self.fs, self.high_fq_range, self.high_fq_width, parallel_filter = self.parallel_filter)
             filtered_low = multiple_band_pass(
-                low_sig, self.fs, self.low_fq_range, self.low_fq_width)
+                low_sig, self.fs, self.low_fq_range, self.low_fq_width, parallel_filter = self.parallel_filter)
             if self.method == 'vanwijk':
                 filtered_low_2 = multiple_band_pass(
-                    low_sig, self.fs, self.low_fq_range, self.low_fq_width_2)
+                    low_sig, self.fs, self.low_fq_range, self.low_fq_width_2, parallel_filter = self.parallel_filter)
             else:
                 filtered_low_2 = None
 
@@ -272,7 +279,7 @@ class Comodulogram(object):
 
             # compute a number of band-pass filtered signals
             filtered_high = multiple_band_pass(
-                high_sig, self.fs, self.high_fq_range, self.high_fq_width)
+                high_sig, self.fs, self.high_fq_range, self.high_fq_width, parallel_filter = self.parallel_filter)
 
             all_results = []
             for this_mask in mask:
