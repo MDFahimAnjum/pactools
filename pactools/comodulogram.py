@@ -124,6 +124,11 @@ class Comodulogram(object):
         Only works for 'eegfilt' method.
         - False : Parallel filtering disabled (default)
         - True : Use Parallel filtering
+    
+    device : string
+        - None (default). Prefers GPU over CPU
+        - 'cpu' for CPU based pytorch tensor
+        - 'cuda' for GPU based pytorch tensor
         
     Examples
     --------
@@ -139,7 +144,7 @@ class Comodulogram(object):
                  high_fq_width='auto', method='tort', n_surrogates=0,
                  vmin=None, vmax=None, progress_bar=True, ax_special=None,
                  minimum_shift=1.0, random_state=None, coherence_params=dict(),
-                 extract_params=dict(), low_fq_width_2=4.0, n_jobs=1,vectorized_calculation=0,parallel_filter=False):
+                 extract_params=dict(), low_fq_width_2=4.0, n_jobs=1,vectorized_calculation=0,parallel_filter=False,device=None):
         self.fs = fs
         self.low_fq_range = low_fq_range
         self.low_fq_width = low_fq_width
@@ -159,6 +164,7 @@ class Comodulogram(object):
         self.n_jobs = n_jobs
         self.vectorized_calculation=vectorized_calculation
         self.parallel_filter=parallel_filter
+        self.device=device
 
     def _check_params(self):
         high_fq_range = self.high_fq_range
@@ -675,11 +681,11 @@ def _comodulogram(estimator, filtered_low, filtered_high, mask,
 
         if estimator.vectorized_calculation == 1 and estimator.method == 'tort':
             mi_list=[_modulation_index_vectorized_v1_gpu(amplitude=filtered_high[j], phase_preprocessed=phase_preprocessed, 
-                method=estimator.method, shifts=estimator.shifts_) for j in range(n_high)]
+                method=estimator.method, shifts=estimator.shifts_, device=estimator.device) for j in range(n_high)]
             mi_list = np.array(mi_list).reshape(n_high, n_shifts).T
         elif estimator.vectorized_calculation == 2 and estimator.method == 'tort':
             mi_list=_modulation_index_vectorized_v2_gpu(amplitudes=filtered_high, phase_preprocessed=phase_preprocessed, 
-                method=estimator.method, shifts=estimator.shifts_)
+                method=estimator.method, shifts=estimator.shifts_, device=estimator.device)
             mi_list = mi_list.T
         else:
             delayed_func = delayed(_loop_over_shifts)
@@ -779,7 +785,7 @@ def _one_modulation_index(amplitude, phase_preprocessed, norm_a, method, shift,
     return MI
 
 
-def _modulation_index_vectorized_v1_gpu(amplitude, phase_preprocessed, method='tort', shifts=None):
+def _modulation_index_vectorized_v1_gpu(amplitude, phase_preprocessed, method='tort', shifts=None, device=None):
     """
     Compute modulation indices for multiple shift values in a vectorized manner using GPU.
     Used by PAC method in STANDARD_PAC_METRICS.
@@ -787,7 +793,8 @@ def _modulation_index_vectorized_v1_gpu(amplitude, phase_preprocessed, method='t
     if method != 'tort':
         raise ValueError("Incompatible method for vectorized calculation: %s" % method)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Move inputs to GPU
     amplitude = torch.tensor(amplitude, dtype=torch.float64, device=device)
@@ -820,7 +827,7 @@ def _modulation_index_vectorized_v1_gpu(amplitude, phase_preprocessed, method='t
 
     return MI.cpu().numpy()  # Return to CPU if further processing on CPU is needed
 
-def _modulation_index_vectorized_v2_gpu(amplitudes, phase_preprocessed, method='tort', shifts=None):
+def _modulation_index_vectorized_v2_gpu(amplitudes, phase_preprocessed, method='tort', shifts=None, device=None):
     """
     Compute modulation indices for multiple shift values in a vectorized manner using GPU.
     Used by PAC method in STANDARD_PAC_METRICS.
@@ -828,7 +835,8 @@ def _modulation_index_vectorized_v2_gpu(amplitudes, phase_preprocessed, method='
     if method != 'tort':
         raise ValueError("Incompatible method for vectorized calculation: %s" % method)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Move to GPU
     amplitudes = torch.tensor(amplitudes, dtype=torch.float64, device=device)
